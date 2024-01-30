@@ -1,0 +1,145 @@
+---
+title: "Week 3 Project: NYPD Shooting Incidents"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+```
+## Description
+Let's take a look at analyzing some of the data from the NYPD shooting incident data set. The city of New York's website describes the data set as follows: From [data.cityofnewyork.us](https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8/about_data) website:
+*"List of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year."*
+
+##### Column Descriptions
+From the [data.cityofnewyork.us](https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8/about_data) website:
+
+* `INCIDENT_KEY`: Randomly generated persistent ID for each incident 
+* `OCCUR_DATE`: Exact date of the shooting incident
+* `OCCUR_TIME`: Exact time of the shooting incident
+* `BORO`: Borough where the shooting incident occurred
+* `PRECINCT`: Precinct where the shooting incident occurred
+* `JURISDICTION_CODE`: Jurisdiction where the shooting incident occurred. Jurisdiction codes 0(Patrol), 1(Transit) and 2(Housing) represent NYPD whilst codes 3 and more represent non NYPD jurisdictions
+* `LOCATION_DESC`: Location of the shooting incident
+* `STATISTICAL_MURDER_FLAG`:	Shooting resulted in the victim’s death which would be counted as a murder
+* `PERP_AGE_GROUP`: Perpetrator’s age within a category
+* `PERP_SEX`: Perpetrator’s sex description
+* `PERP_RACE`: Perpetrator’s race description
+* `VIC_AGE_GROUP`: Victim’s age within a category
+* `VIC_SEX`: Victim’s sex description
+* `VIC_RACE`: Victim’s race description
+* `X_COORD_CD`: Midblock X-coordinate for New York State Plane Coordinate System, Long Island Zone, NAD 83, units feet (FIPS 3104)
+* `Y_COORD_CD`: Midblock Y-coordinate for New York State Plane Coordinate System, Long Island Zone, NAD 83, units feet (FIPS 3104)
+* `Latitude`: Latitude coordinate for Global Coordinate System, WGS 1984, decimal degrees (EPSG 4326)
+* `Longitude`: Longitude coordinate for Global Coordinate System, WGS 1984, decimal degrees (EPSG 4326)
+* `Lon_Lat`: Longitude and Latitude Coordinates for mapping
+
+## Download and load the data
+```{r}
+nypd_shooting_data <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+if(!file.exists("data")) {
+  dir.create("data")
+}
+
+download_file <- function(file_link, file_name) {
+  if (!file.exists(file_link)) {
+    download.file(file_link, destfile = str_glue("data/{file}", file = file_name), method = "curl")
+  }
+}
+
+if (!file.exists("data/nypd_shooting_data.csv")) {
+    download_file(nypd_shooting_data, "nypd_shooting_data.csv")
+}
+```
+
+## Cleanup and summary
+```{r}
+# Read the csv file
+nypd <- read_csv("data/nypd_shooting_data.csv")
+
+# Combine OCCUR_DATE and OCCUR_TIME into one column
+nypd <- nypd %>% unite("OCCUR_DATE", OCCUR_DATE:OCCUR_TIME, sep = " ")
+
+# Convert OCCUR_DATE to date type
+nypd <- nypd %>% mutate(OCCUR_DATE = as_datetime(OCCUR_DATE, format = "%m/%d/%Y %H:%M:%S"))
+
+# Convert BORO to factor type
+nypd <- nypd %>% mutate(BORO = as_factor(BORO))
+
+# Convert PERP_AGE_GROUP to factor type
+nypd <- nypd %>% mutate(PERP_AGE_GROUP = as_factor(PERP_AGE_GROUP))
+
+# Convert PERP_SEX to factor type
+nypd <- nypd %>% mutate(PERP_SEX = as_factor(PERP_SEX))
+
+# Convert PERP_RACE to factor type
+nypd <- nypd %>% mutate(PERP_RACE = as_factor(PERP_RACE))
+
+# Convert VIC_AGE_GROUP to factor type
+nypd <- nypd %>% mutate(VIC_AGE_GROUP = as_factor(VIC_AGE_GROUP))
+
+# Convert VIC_SEX to factor type
+nypd <- nypd %>% mutate(VIC_SEX = as_factor(VIC_SEX))
+
+# Convert VIC_RACE to factor type
+nypd <- nypd %>% mutate(VIC_RACE = as_factor(VIC_RACE))
+
+# Drop Lon_Lat column
+nypd <- nypd %>% select(-Lon_Lat)
+
+# Remove duplicate rows
+nypd <- nypd %>% distinct(INCIDENT_KEY, .keep_all = TRUE)
+
+summary(nypd)
+```
+
+## Missing data
+It looks like there is some missing data, notably with the `PERP_AGE_GROUP`, `PERP_SEX`, and `PERP_RACE` columns. My intuition tells me the 8090 NA's and the 525 `(null)`s for `PERP_SEX` and `PERP_RACE` are for perpetrators that were not caught. There are more NA's in the `PERP_AGE_GROUP` column than the number of NA's in the `PERP_SEX` and `PERP_RACE` columns, and this seems likely due to values that were not entered correctly or were missing at some part in the reporting process. We can handle this missing data, as well as any other missing data, by not including it in any comparative analyses where the other columns have values present. For example, your results would be skewed if you were to compare `PERP_RACE` with `VIC_RACE` without first removing rows with missing values from either of those columns from consideration.
+
+## Visualizations
+```{r}
+vis1 <- nypd %>% group_by(year(OCCUR_DATE)) %>% summarise(incidents = n())
+vis1 %>% ggplot(aes(x = `year(OCCUR_DATE)`, y = incidents, fill = incidents)) +
+  geom_col()
+```
+It looks like the number of shooting incidents in New York had been trending downward from 2006 through 2019 with a sudden uptick starting in 2020. This does raise some questions about the causes of the downward trend and the subsequent sudden uptick that could potentially be answered with a deeper analysis.
+\
+
+##### A model
+\
+I will create a linear regression model that attempts to predict the number of shootings in a given year.
+```{r}
+# create a tibble that contains the year and the corresponding number of shootings for that year
+m1 <- nypd %>% group_by(year(OCCUR_DATE)) %>% summarise(shootings = n()) %>% rename(year = `year(OCCUR_DATE)`)
+m1
+
+# fit a linear model to the data and show the estimated coefficients
+model <- lm(shootings ~ year, data = m1)
+model
+
+# plot the original data and the linear regression
+m1 %>% ggplot(aes(x = year, y = shootings)) +
+  # original data
+  geom_point() +
+  # linear regression
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  # make y-axis start at 0
+  expand_limits(y = 0)
+```
+This example of a linear regression predicts that the number of shootings will decrease as time goes on. It would be interesting to take a look at this same example again that includes future data, maybe 10 years from now, and compare how the predicted coefficients change over that time period. It might also be interesting to run the same linear regression on data from other large metropolitan areas and compare the results.
+
+
+## Conclusion
+There is a lot of insight to be gained from analyzing this NYPD shooting incidents data set, and we hardly scratched the surface in this project. There is a possibility of bias in any variables that are descriptive, such as `LOCATION_DESC`, and any variables that may be up to the reporting officer's interpretation, such as `PERP_AGE_GROUP` in the case that the perpetrator was caught but did not have an ID. There also may be a bias in that some incidents were not reported at all. In regard to personal bias, had we gone deeper with the analysis, confirmation bias, or choosing to analyze and interpret the data in a way that confirms one's own pre-existing beliefs, and overgeneralization, or drawing conclusions outside the scope of the analysis, would be two important aspects to keep in mind while going through the analysis.
+```{r}
+sessionInfo()
+```
+
